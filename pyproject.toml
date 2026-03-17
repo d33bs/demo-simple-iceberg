@@ -19,6 +19,7 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
+  "ome-arrow>=0.0.8",
   "pandas>=2.2.3",
   "pyarrow>=19.0.1",
   "pyiceberg[pyarrow]>=0.9",

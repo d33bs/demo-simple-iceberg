@@ -114,13 +114,23 @@ That keeps the interface simple:
 - `describe(...)` gives a small Iceberg-aware summary
 - `read(warehouse=..., table=...)` loads one table into a dataframe
 
+If you want stable object-style identifiers for image rows, use the helper from the
+CytoTable layer:
+
+```python
+from demo_simple_iceberg import object_id
+
+image_id = object_id("plate-1-well-a01-site-1")
+# obj-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
 ## Iceberg Features Demonstrated
 
 This example intentionally keeps the scope narrow.
 
 - `Catalog listing`: discover multiple tables from one catalog instead of tracking raw parquet file paths
 - `Table-backed parquet storage`: data lands as parquet files, but the catalog and Iceberg metadata give the tables structure
-- `Arrow struct columns for images`: the `images` table stores an `ome_image` struct with shape, channel names, and pixels
+- `OME-Arrow image payloads`: the `images` table is generated with `ome-arrow` and stored as an Iceberg-safe projection of that Arrow struct
 - `Saved joins as lightweight views`: the `profile_image_view` entry resolves into a pandas join across Iceberg tables
 - `Snapshot history`: inspect the current table history after appends
 - `Pandas interoperability`: read from Iceberg and continue analysis with standard pandas merges and transformations
@@ -129,5 +139,6 @@ This example intentionally keeps the scope narrow.
 
 - The demo recreates `demo_warehouse/` each time it runs so the output stays deterministic.
 - This is a local example using `pyiceberg` table metadata plus a tiny filesystem registry for table discovery.
+- `ome-arrow` is used to generate the nested image payloads. The demo drops the top-level `masks` field before writing because current `pyiceberg` here does not support the `null` Arrow type inside Iceberg format v2 tables.
 - The warehouse on disk contains Iceberg metadata files, parquet data files, and a small JSON registry file.
 - It is designed for learning and small-project ergonomics, not production hardening.

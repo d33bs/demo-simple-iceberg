@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from demo_simple_iceberg.demo import build_demo_outputs, main
+from demo_simple_iceberg.demo import IMAGE_IDS, build_demo_outputs, main
 
 
 def test_build_demo_outputs(tmp_path: Path) -> None:
@@ -15,9 +15,9 @@ def test_build_demo_outputs(tmp_path: Path) -> None:
     assert catalog["rows"].tolist() == [3, 3, 3]
 
     joined = outputs["profile_image_view"]
-    assert joined.shape == (3, 6)
-    assert joined["image_id"].tolist() == ["IMG-001", "IMG-002", "IMG-003"]
-    assert "ome_image" in joined.columns
+    assert joined.shape == (3, 7)
+    assert joined["image_id"].tolist() == IMAGE_IDS
+    assert "image_type" in joined.columns
 
 
 def test_cli_main_prints_sections(tmp_path: Path, capsys: object) -> None:

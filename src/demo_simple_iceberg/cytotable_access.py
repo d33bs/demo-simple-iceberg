@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import pandas as pd
 import pyarrow as pa
@@ -24,6 +25,12 @@ MIN_VIEW_SOURCES = 2
 
 def _qualify(name: str, namespace: str) -> str:
     return name if "." in name else f"{namespace}.{name}"
+
+
+def object_id(name: str | UUID | None = None, *, prefix: str = "obj") -> str:
+    """Return a string object identifier with a UUID-shaped payload."""
+    value = uuid4() if name is None else uuid5(NAMESPACE_URL, str(name))
+    return f"{prefix}-{value}"
 
 
 class TinyCatalog(MetastoreCatalog):

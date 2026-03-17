@@ -7,50 +7,51 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import pyarrow as pa
+from ome_arrow import OMEArrow
+from ome_arrow.meta import OME_ARROW_STRUCT
 from pyiceberg.schema import Schema
-from pyiceberg.types import (
-    DoubleType,
-    ListType,
-    LongType,
-    NestedField,
-    StringType,
-    StructType,
-)
+from pyiceberg.types import DoubleType, LongType, NestedField, StringType
 
 from demo_simple_iceberg.cytotable_access import (
     NAMESPACE,
     TinyCatalog,
     create_join_view,
     describe,
+    object_id,
     read,
 )
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_WAREHOUSE = ROOT_DIR / "demo_warehouse"
 DEMO_ROW_COUNT = 3
+ICEBERG_OME_ARROW_STRUCT = pa.struct(
+    [field for field in OME_ARROW_STRUCT if field.name != "masks"]
+)
+IMAGE_IDS = [object_id(f"image-{index:03d}") for index in range(1, DEMO_ROW_COUNT + 1)]
 
 TABLES = {
     "profiles": pd.DataFrame(
         [
             {
                 "profile_id": "P-001",
-                "image_id": "IMG-001",
+                "image_id": IMAGE_IDS[0],
                 "well_id": "A01",
                 "cell_count": 182,
                 "mean_intensity": 0.82,
             },
             {
                 "profile_id": "P-002",
-                "image_id": "IMG-002",
+                "image_id": IMAGE_IDS[1],
                 "well_id": "A02",
                 "cell_count": 205,
                 "mean_intensity": 0.67,
             },
             {
                 "profile_id": "P-003",
-                "image_id": "IMG-003",
+                "image_id": IMAGE_IDS[2],
                 "well_id": "B01",
                 "cell_count": 163,
                 "mean_intensity": 0.91,
@@ -81,38 +82,6 @@ ICEBERG_SCHEMAS = {
         ("cell_count", LongType()),
         ("mean_intensity", DoubleType()),
     ),
-    "images": iceberg_schema(
-        ("image_id", StringType()),
-        (
-            "ome_image",
-            StructType(
-                NestedField(
-                    1,
-                    "size_yx",
-                    ListType(
-                        element_id=2, element_type=LongType(), element_required=False
-                    ),
-                    required=False,
-                ),
-                NestedField(
-                    3,
-                    "channel_names",
-                    ListType(
-                        element_id=4, element_type=StringType(), element_required=False
-                    ),
-                    required=False,
-                ),
-                NestedField(
-                    5,
-                    "pixels",
-                    ListType(
-                        element_id=6, element_type=LongType(), element_required=False
-                    ),
-                    required=False,
-                ),
-            ),
-        ),
-    ),
 }
 
 ARROW_SCHEMAS = {
@@ -125,45 +94,32 @@ ARROW_SCHEMAS = {
     ),
     "images": arrow_schema(
         ("image_id", pa.string()),
-        (
-            "ome_image",
-            pa.struct(
-                [
-                    pa.field("size_yx", pa.list_(pa.int64())),
-                    pa.field("channel_names", pa.list_(pa.string())),
-                    pa.field("pixels", pa.list_(pa.int64())),
-                ]
-            ),
-        ),
+        ("ome_arrow", ICEBERG_OME_ARROW_STRUCT),
     ),
 }
 
+ICEBERG_SCHEMAS["images"] = ARROW_SCHEMAS["images"]
+
 
 def image_table() -> pa.Table:
-    """Build a tiny Arrow table with OME-Arrow-style struct payloads."""
+    """Build a tiny Arrow table using ome-arrow payloads projected for Iceberg."""
+
+    def as_iceberg_row(pixels: list[list[int]]) -> dict[str, object]:
+        row = OMEArrow(
+            np.array([[[pixels]]], dtype="uint16"),
+            image_type="image",
+        ).data.as_py()
+        return {key: value for key, value in row.items() if key != "masks"}
+
+    ome_rows = [
+        as_iceberg_row([[0, 32], [64, 255]]),
+        as_iceberg_row([[8, 24], [96, 180]]),
+        as_iceberg_row([[12, 48], [128, 220]]),
+    ]
     return pa.table(
         {
-            "image_id": pa.array(["IMG-001", "IMG-002", "IMG-003"]),
-            "ome_image": pa.array(
-                [
-                    {
-                        "size_yx": [2, 2],
-                        "channel_names": ["DNA"],
-                        "pixels": [0, 32, 64, 255],
-                    },
-                    {
-                        "size_yx": [2, 2],
-                        "channel_names": ["DNA"],
-                        "pixels": [8, 24, 96, 180],
-                    },
-                    {
-                        "size_yx": [2, 2],
-                        "channel_names": ["DNA"],
-                        "pixels": [12, 48, 128, 220],
-                    },
-                ],
-                type=ARROW_SCHEMAS["images"].field("ome_image").type,
-            ),
+            "image_id": pa.array(IMAGE_IDS),
+            "ome_arrow": pa.array(ome_rows, type=ICEBERG_OME_ARROW_STRUCT),
         },
         schema=ARROW_SCHEMAS["images"],
     )
@@ -175,7 +131,10 @@ def build_demo_warehouse(warehouse_root: Path = DEFAULT_WAREHOUSE) -> TinyCatalo
     catalog = TinyCatalog(warehouse_root)
     catalog.create_namespace(NAMESPACE)
     for name, frame in {**TABLES, "images": image_table()}.items():
-        table = catalog.create_table((NAMESPACE, name), ICEBERG_SCHEMAS[name])
+        table = catalog.create_table(
+            (NAMESPACE, name),
+            ICEBERG_SCHEMAS[name],
+        )
         arrow_table = (
             frame
             if isinstance(frame, pa.Table)
@@ -230,6 +189,20 @@ def inspect_table(catalog: TinyCatalog, name: str) -> dict[str, pd.DataFrame]:
     }
 
 
+def image_summary(frame: pd.DataFrame) -> pd.DataFrame:
+    """Build a compact display for the nested ome-arrow image payload."""
+    return frame.assign(
+        image_type=lambda df: df["ome_arrow"].map(lambda value: value["image_type"]),
+        size_yx=lambda df: df["ome_arrow"].map(
+            lambda value: (
+                value["pixels_meta"]["size_y"],
+                value["pixels_meta"]["size_x"],
+            )
+        ),
+        plane_count=lambda df: df["ome_arrow"].map(lambda value: len(value["planes"])),
+    )[["image_id", "image_type", "size_yx", "plane_count"]]
+
+
 def build_demo_outputs(
     warehouse_root: Path = DEFAULT_WAREHOUSE,
 ) -> dict[str, pd.DataFrame]:
@@ -243,11 +216,30 @@ def build_demo_outputs(
             ["namespace", "table", "kind", "rows", "data_files", "snapshot_id"]
         ]
     joined = read(warehouse_root, "profile_image_view")
+    view_summary = joined.assign(
+        image_type=lambda df: df["ome_arrow"].map(lambda value: value["image_type"]),
+        size_yx=lambda df: df["ome_arrow"].map(
+            lambda value: (
+                value["pixels_meta"]["size_y"],
+                value["pixels_meta"]["size_x"],
+            )
+        ),
+    )[
+        [
+            "profile_id",
+            "image_id",
+            "well_id",
+            "cell_count",
+            "mean_intensity",
+            "image_type",
+            "size_yx",
+        ]
+    ]
     return {
         "catalog": catalog_df,
         "profiles": profiles["data"],
-        "images": images["data"],
-        "profile_image_view": joined,
+        "images": image_summary(images["data"]),
+        "profile_image_view": view_summary,
         "files": images["files"],
         "manifests": images["manifests"],
         "snapshots": images["snapshots"],

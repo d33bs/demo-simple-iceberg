@@ -8,6 +8,7 @@ from demo_simple_iceberg.cytotable_access import (
     TinyCatalog,
     create_view,
     describe,
+    object_id,
     read,
     tables,
 )
@@ -18,6 +19,8 @@ from demo_simple_iceberg.demo import (
     TABLES,
     build_demo_warehouse,
 )
+
+OBJECT_ID_LENGTH = 40
 
 
 def test_result_helpers_make_warehouse_easy_to_use(tmp_path: Path) -> None:
@@ -52,7 +55,7 @@ def test_custom_views_can_join_tables(tmp_path: Path) -> None:
 
     assert "analytics.profiles_with_images" in tables(warehouse)
     joined = read(warehouse=warehouse, table="profiles_with_images")
-    assert "ome_image" in joined.columns
+    assert "ome_arrow" in joined.columns
     assert joined.shape[0] == DEMO_ROW_COUNT
 
 
@@ -95,3 +98,11 @@ def test_access_helpers_support_custom_namespace_and_registry(tmp_path: Path) ->
         registry_file="cytotable_registry.json",
     )
     assert summary["table"].tolist() == ["experiment.profiles"]
+
+
+def test_object_id_uses_prefixed_uuid_strings() -> None:
+    """Object IDs should be string-friendly and UUID-shaped."""
+    generated = object_id("image-001")
+    assert generated.startswith("obj-")
+    assert generated == object_id("image-001")
+    assert len(generated) == OBJECT_ID_LENGTH
