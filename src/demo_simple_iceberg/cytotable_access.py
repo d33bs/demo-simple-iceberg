@@ -17,26 +17,33 @@ from pyiceberg.table.sorting import UNSORTED_SORT_ORDER, SortOrder
 from pyiceberg.table.update import TableRequirement, TableUpdate
 from pyiceberg.typedef import EMPTY_DICT, Identifier, Properties
 
-NAMESPACE = "analytics"
-REGISTRY_FILE = "catalog.json"
+DEFAULT_NAMESPACE = "analytics"
+DEFAULT_REGISTRY_FILE = "catalog.json"
 MIN_VIEW_SOURCES = 2
 
 
-def _qualify(name: str) -> str:
-    return name if "." in name else f"{NAMESPACE}.{name}"
+def _qualify(name: str, namespace: str) -> str:
+    return name if "." in name else f"{namespace}.{name}"
 
 
 class TinyCatalog(MetastoreCatalog):
     """Tiny filesystem-backed catalog for local Iceberg result bundles."""
 
-    def __init__(self, warehouse_root: Path) -> None:
-        self.registry_path = warehouse_root / REGISTRY_FILE
+    def __init__(
+        self,
+        warehouse_root: Path,
+        *,
+        default_namespace: str = DEFAULT_NAMESPACE,
+        registry_file: str = DEFAULT_REGISTRY_FILE,
+    ) -> None:
+        self.default_namespace = default_namespace
+        self.registry_path = warehouse_root / registry_file
         warehouse_root.mkdir(parents=True, exist_ok=True)
         super().__init__("local", warehouse=warehouse_root.resolve().as_uri())
 
     def _read_registry(self) -> dict[str, object]:
         if not self.registry_path.exists():
-            return {"namespaces": [NAMESPACE], "tables": {}, "views": {}}
+            return {"namespaces": [self.default_namespace], "tables": {}, "views": {}}
         registry = json.loads(self.registry_path.read_text())
         registry.setdefault("views", {})
         return registry
@@ -175,26 +182,44 @@ class TinyCatalog(MetastoreCatalog):
         raise NotImplementedError
 
 
-def catalog(warehouse: str | Path) -> TinyCatalog:
+def catalog(
+    warehouse: str | Path,
+    *,
+    default_namespace: str = DEFAULT_NAMESPACE,
+    registry_file: str = DEFAULT_REGISTRY_FILE,
+) -> TinyCatalog:
     """Open a local result bundle and return a tiny catalog object."""
     root = Path(warehouse)
-    warehouse = root if (root / REGISTRY_FILE).exists() else root / "warehouse"
-    return TinyCatalog(warehouse)
+    warehouse = root if (root / registry_file).exists() else root / "warehouse"
+    return TinyCatalog(
+        warehouse,
+        default_namespace=default_namespace,
+        registry_file=registry_file,
+    )
 
 
-def create_view(
+def create_view(  # noqa: PLR0913
     warehouse: str | Path,
     name: str,
     sources: list[str],
     join_keys: list[str],
     how: str = "left",
+    *,
+    default_namespace: str = DEFAULT_NAMESPACE,
+    registry_file: str = DEFAULT_REGISTRY_FILE,
 ) -> None:
     """Create a simple saved join view inside the registry."""
     if len(sources) < MIN_VIEW_SOURCES:
         raise ValueError("A view needs at least two sources.")
-    bundle = catalog(warehouse)
-    identifier = _qualify(name)
-    qualified_sources = [_qualify(source) for source in sources]
+    bundle = catalog(
+        warehouse,
+        default_namespace=default_namespace,
+        registry_file=registry_file,
+    )
+    identifier = _qualify(name, bundle.default_namespace)
+    qualified_sources = [
+        _qualify(source, bundle.default_namespace) for source in sources
+    ]
     joins = [
         {"source": source, "on": join_keys, "how": how}
         for source in qualified_sources[1:]
@@ -208,18 +233,28 @@ def create_view(
     bundle._write_registry(registry)
 
 
-def create_join_view(
-    warehouse: str | Path, name: str, base: str, joins: list[dict[str, object]]
+def create_join_view(  # noqa: PLR0913
+    warehouse: str | Path,
+    name: str,
+    base: str,
+    joins: list[dict[str, object]],
+    *,
+    default_namespace: str = DEFAULT_NAMESPACE,
+    registry_file: str = DEFAULT_REGISTRY_FILE,
 ) -> None:
     """Create a saved view with explicit join steps."""
-    bundle = catalog(warehouse)
+    bundle = catalog(
+        warehouse,
+        default_namespace=default_namespace,
+        registry_file=registry_file,
+    )
     registry = bundle._read_registry()
-    registry["views"][_qualify(name)] = {
+    registry["views"][_qualify(name, bundle.default_namespace)] = {
         "kind": "pandas_merge",
-        "base": _qualify(base),
+        "base": _qualify(base, bundle.default_namespace),
         "joins": [
             {
-                "source": _qualify(str(join["source"])),
+                "source": _qualify(str(join["source"]), bundle.default_namespace),
                 "on": list(join["on"]),
                 "how": join.get("how", "left"),
             }
@@ -245,9 +280,19 @@ def _read_view(bundle: TinyCatalog, name: str) -> pd.DataFrame:
     return result
 
 
-def tables(warehouse: str | Path, include_views: bool = True) -> list[str]:
+def tables(
+    warehouse: str | Path,
+    include_views: bool = True,
+    *,
+    default_namespace: str = DEFAULT_NAMESPACE,
+    registry_file: str = DEFAULT_REGISTRY_FILE,
+) -> list[str]:
     """List fully qualified table names in a result bundle."""
-    bundle = catalog(warehouse)
+    bundle = catalog(
+        warehouse,
+        default_namespace=default_namespace,
+        registry_file=registry_file,
+    )
     names = [
         ".".join(identifier)
         for namespace in bundle.list_namespaces()
@@ -262,18 +307,38 @@ def tables(warehouse: str | Path, include_views: bool = True) -> list[str]:
     return sorted(names)
 
 
-def read(warehouse: str | Path, table: str) -> pd.DataFrame:
+def read(
+    warehouse: str | Path,
+    table: str,
+    *,
+    default_namespace: str = DEFAULT_NAMESPACE,
+    registry_file: str = DEFAULT_REGISTRY_FILE,
+) -> pd.DataFrame:
     """Read one Iceberg table into pandas using a short name or full name."""
-    bundle = catalog(warehouse)
-    name = table if "." in table else f"{NAMESPACE}.{table}"
+    bundle = catalog(
+        warehouse,
+        default_namespace=default_namespace,
+        registry_file=registry_file,
+    )
+    name = table if "." in table else f"{bundle.default_namespace}.{table}"
     if bundle.view_exists(tuple(name.split("."))):
         return _read_view(bundle, name)
     return bundle.load_table(tuple(name.split("."))).scan().to_arrow().to_pandas()
 
 
-def describe(warehouse: str | Path, include_views: bool = True) -> pd.DataFrame:
+def describe(
+    warehouse: str | Path,
+    include_views: bool = True,
+    *,
+    default_namespace: str = DEFAULT_NAMESPACE,
+    registry_file: str = DEFAULT_REGISTRY_FILE,
+) -> pd.DataFrame:
     """Return a small summary for each table in the bundle."""
-    bundle = catalog(warehouse)
+    bundle = catalog(
+        warehouse,
+        default_namespace=default_namespace,
+        registry_file=registry_file,
+    )
     rows: list[dict[str, object]] = []
     for namespace in bundle.list_namespaces():
         for identifier in bundle.list_tables(namespace):
@@ -308,3 +373,5 @@ load_catalog = catalog
 list_tables = tables
 read_pandas = read
 describe_result = describe
+NAMESPACE = DEFAULT_NAMESPACE
+REGISTRY_FILE = DEFAULT_REGISTRY_FILE

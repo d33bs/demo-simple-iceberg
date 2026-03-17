@@ -2,8 +2,22 @@
 
 from pathlib import Path
 
-from demo_simple_iceberg.cytotable_access import create_view, describe, read, tables
-from demo_simple_iceberg.demo import DEMO_ROW_COUNT, build_demo_warehouse
+import pyarrow as pa
+
+from demo_simple_iceberg.cytotable_access import (
+    TinyCatalog,
+    create_view,
+    describe,
+    read,
+    tables,
+)
+from demo_simple_iceberg.demo import (
+    ARROW_SCHEMAS,
+    DEMO_ROW_COUNT,
+    ICEBERG_SCHEMAS,
+    TABLES,
+    build_demo_warehouse,
+)
 
 
 def test_result_helpers_make_warehouse_easy_to_use(tmp_path: Path) -> None:
@@ -40,3 +54,44 @@ def test_custom_views_can_join_tables(tmp_path: Path) -> None:
     joined = read(warehouse=warehouse, table="profiles_with_images")
     assert "ome_image" in joined.columns
     assert joined.shape[0] == DEMO_ROW_COUNT
+
+
+def test_access_helpers_support_custom_namespace_and_registry(tmp_path: Path) -> None:
+    """The reusable access layer should not depend on demo defaults."""
+    warehouse = tmp_path / "custom_warehouse"
+    catalog = TinyCatalog(
+        warehouse,
+        default_namespace="experiment",
+        registry_file="cytotable_registry.json",
+    )
+    catalog.create_namespace("experiment")
+    table = catalog.create_table(
+        ("experiment", "profiles"), ICEBERG_SCHEMAS["profiles"]
+    )
+    table.append(
+        pa.Table.from_pandas(
+            TABLES["profiles"],
+            schema=ARROW_SCHEMAS["profiles"],
+            preserve_index=False,
+        )
+    )
+
+    assert tables(
+        warehouse,
+        include_views=False,
+        default_namespace="experiment",
+        registry_file="cytotable_registry.json",
+    ) == ["experiment.profiles"]
+    frame = read(
+        warehouse,
+        table="profiles",
+        default_namespace="experiment",
+        registry_file="cytotable_registry.json",
+    )
+    assert frame.shape == (DEMO_ROW_COUNT, 5)
+    summary = describe(
+        warehouse,
+        default_namespace="experiment",
+        registry_file="cytotable_registry.json",
+    )
+    assert summary["table"].tolist() == ["experiment.profiles"]

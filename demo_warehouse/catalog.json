@@ -3,8 +3,8 @@
     "analytics"
   ],
   "tables": {
-    "analytics.images": "file:///Users/buntend/Documents/work/demo-simple-iceberg/demo_warehouse/analytics/images/metadata/00001-996d0af1-fc9b-4880-9db7-5c733991c19c.metadata.json",
-    "analytics.profiles": "file:///Users/buntend/Documents/work/demo-simple-iceberg/demo_warehouse/analytics/profiles/metadata/00001-c3ba2d4f-0e3a-4d6d-956d-c9ee6b6e7d3f.metadata.json"
+    "analytics.images": "file:///Users/buntend/Documents/work/demo-simple-iceberg/demo_warehouse/analytics/images/metadata/00001-5831aedc-2e66-464e-9ddc-77cf2a4a11d4.metadata.json",
+    "analytics.profiles": "file:///Users/buntend/Documents/work/demo-simple-iceberg/demo_warehouse/analytics/profiles/metadata/00001-cea4abdf-aa09-418e-9813-17a7b4563a2c.metadata.json"
   },
   "views": {
     "analytics.profile_image_view": {
