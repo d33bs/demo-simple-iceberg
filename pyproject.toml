@@ -1,11 +1,11 @@
 [build-system]
 build-backend = "setuptools.build_meta"
-requires = [ "setuptools>=64", "setuptools-scm>=8" ]
+requires = [ "setuptools>=64" ]
 
 [project]
 name = "demo-simple-iceberg"
 version = "0.0.1"
-description = "Demonstrating simple capabilities with Apache Iceberg"
+description = "Small local Apache Iceberg catalog demo for pandas-style workflows"
 readme = "README.md"
 authors = [
   { name = "d33bs" },
@@ -16,37 +16,24 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
   "pandas>=2.2.3",
-  "fire>=0.7.0",
-  "jinja2>=3.1.6",
+  "pyarrow>=19.0.1",
+  "pyiceberg[pyarrow]>=0.9",
 ]
-scripts.demo-simple-iceberg = "demo-simple-iceberg.cli:trigger"
+scripts.demo-simple-iceberg = "demo_simple_iceberg.demo:main"
 
 [dependency-groups]
 dev = [
   "poethepoet>=0.34",
   "pytest>=8.3.5",
 ]
-docs = [
-  "myst-nb>=1.2",
-  "pydata-sphinx-theme>=0.16.1",
-  "sphinx>=8.2.3",
-]
-notebooks = [
-  "black>=25.1",
-  "isort>=6.0.1",
-  "jupyterlab>=4.4.2",
-  "jupyterlab-code-formatter>=3.0.2",
-  "jupytext>=1.17.1",
-]
 
-[tool.setuptools_scm]
-root = "."
-version_scheme = "no-guess-dev"
-local_scheme = "no-local-version"
-version_file = "src/demo-simple-iceberg/_version.py"
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages.find.where = [ "src" ]
 
 [tool.ruff]
 target-version = "py311"
@@ -78,21 +65,17 @@ lint.select = [
 # Ignore `F401` (unused imports) for `__init__.py` file
 lint.per-file-ignores."__init__.py" = [ "F401" ]
 
-[tool.pytest.ini_options]
-pythonpath = [ "." ]
-
-[tool.poe.tasks]
-# tasks for development environments
-test.shell = """
-pytest
-"""
-jupyter.shell = """
-jupyter lab
-"""
-
-[tool.jupytext]
-formats = "ipynb,py:light"
+[tool.pytest]
+ini_options.pythonpath = [ "." ]
 
 [tool.vulture]
 min_confidence = 90
-paths = [ "src/demo-simple-iceberg", "tests" ]
+paths = [ "src/demo_simple_iceberg", "tests" ]
+
+[tool.poe]
+tasks.test.shell = """
+pytest
+"""
+tasks.demo.shell = """
+python -m demo_simple_iceberg.demo
+"""
