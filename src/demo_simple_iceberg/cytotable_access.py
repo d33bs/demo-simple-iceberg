@@ -6,22 +6,30 @@ import json
 from pathlib import Path
 
 import pandas as pd
-from pyiceberg.catalog import Catalog, MetastoreCatalog
+import pyarrow as pa
+from pyiceberg.catalog import Catalog, MetastoreCatalog, PropertiesUpdateSummary
 from pyiceberg.exceptions import NoSuchNamespaceError, NoSuchTableError
+from pyiceberg.partitioning import UNPARTITIONED_PARTITION_SPEC, PartitionSpec
+from pyiceberg.schema import Schema
 from pyiceberg.serializers import FromInputFile
 from pyiceberg.table import CommitTableResponse, Table
-from pyiceberg.table.sorting import UNSORTED_SORT_ORDER
+from pyiceberg.table.sorting import UNSORTED_SORT_ORDER, SortOrder
 from pyiceberg.table.update import TableRequirement, TableUpdate
-from pyiceberg.typedef import EMPTY_DICT
+from pyiceberg.typedef import EMPTY_DICT, Identifier, Properties
 
 NAMESPACE = "analytics"
 REGISTRY_FILE = "catalog.json"
+MIN_VIEW_SOURCES = 2
+
+
+def _qualify(name: str) -> str:
+    return name if "." in name else f"{NAMESPACE}.{name}"
 
 
 class TinyCatalog(MetastoreCatalog):
     """Tiny filesystem-backed catalog for local Iceberg result bundles."""
 
-    def __init__(self, warehouse_root: Path):
+    def __init__(self, warehouse_root: Path) -> None:
         self.registry_path = warehouse_root / REGISTRY_FILE
         warehouse_root.mkdir(parents=True, exist_ok=True)
         super().__init__("local", warehouse=warehouse_root.resolve().as_uri())
@@ -36,90 +44,134 @@ class TinyCatalog(MetastoreCatalog):
     def _write_registry(self, registry: dict[str, object]) -> None:
         self.registry_path.write_text(json.dumps(registry, indent=2, sort_keys=True))
 
-    def create_namespace(self, namespace, properties=EMPTY_DICT) -> None:
+    def create_namespace(
+        self, namespace: str | Identifier, properties: Properties = EMPTY_DICT
+    ) -> None:
         registry = self._read_registry()
         names = set(registry["namespaces"])
         names.add(Catalog.namespace_to_string(namespace))
         registry["namespaces"] = sorted(names)
         self._write_registry(registry)
 
-    def load_namespace_properties(self, namespace) -> dict[str, str]:
+    def load_namespace_properties(self, namespace: str | Identifier) -> dict[str, str]:
         name = Catalog.namespace_to_string(namespace)
         if name not in self._read_registry()["namespaces"]:
             raise NoSuchNamespaceError(name)
         return {}
 
-    def list_namespaces(self, namespace=()) -> list[tuple[str, ...]]:
+    def list_namespaces(
+        self, namespace: str | Identifier = ()
+    ) -> list[tuple[str, ...]]:
         return [tuple(name.split(".")) for name in self._read_registry()["namespaces"]]
 
-    def list_tables(self, namespace) -> list[tuple[str, ...]]:
+    def list_tables(self, namespace: str | Identifier) -> list[tuple[str, ...]]:
         prefix = f"{Catalog.namespace_to_string(namespace)}."
-        return [tuple(name.split(".")) for name in sorted(self._read_registry()["tables"]) if name.startswith(prefix)]
+        return [
+            tuple(name.split("."))
+            for name in sorted(self._read_registry()["tables"])
+            if name.startswith(prefix)
+        ]
 
-    def load_table(self, identifier) -> Table:
+    def load_table(self, identifier: str | Identifier) -> Table:
         name = ".".join(Catalog.identifier_to_tuple(identifier))
         metadata_location = self._read_registry()["tables"].get(name)
         if metadata_location is None:
             raise NoSuchTableError(name)
         io = self._load_file_io(location=metadata_location)
         metadata = FromInputFile.table_metadata(io.new_input(metadata_location))
-        return Table(Catalog.identifier_to_tuple(identifier), metadata, metadata_location, io, self)
+        return Table(
+            Catalog.identifier_to_tuple(identifier),
+            metadata,
+            metadata_location,
+            io,
+            self,
+        )
 
-    def register_table(self, identifier, metadata_location: str) -> Table:
+    def register_table(
+        self, identifier: str | Identifier, metadata_location: str
+    ) -> Table:
         registry = self._read_registry()
-        registry["tables"][".".join(Catalog.identifier_to_tuple(identifier))] = metadata_location
+        registry["tables"][".".join(Catalog.identifier_to_tuple(identifier))] = (
+            metadata_location
+        )
         self._write_registry(registry)
         return self.load_table(identifier)
 
     def commit_table(
-        self, table: Table, requirements: tuple[TableRequirement, ...], updates: tuple[TableUpdate, ...]
+        self,
+        table: Table,
+        requirements: tuple[TableRequirement, ...],
+        updates: tuple[TableUpdate, ...],
     ) -> CommitTableResponse:
         identifier = Catalog.identifier_to_tuple(table.name())
         try:
             current = self.load_table(identifier)
         except NoSuchTableError:
             current = None
-        staged = self._update_and_stage_table(current, identifier, requirements, updates)
+        staged = self._update_and_stage_table(
+            current, identifier, requirements, updates
+        )
         self._write_metadata(staged.metadata, staged.io, staged.metadata_location)
         registry = self._read_registry()
         registry["tables"][".".join(identifier)] = staged.metadata_location
         self._write_registry(registry)
-        return CommitTableResponse(metadata=staged.metadata, metadata_location=staged.metadata_location)
+        return CommitTableResponse(
+            metadata=staged.metadata, metadata_location=staged.metadata_location
+        )
 
-    def create_table(
-        self, identifier, schema, location=None, partition_spec=None, sort_order=UNSORTED_SORT_ORDER, properties=EMPTY_DICT
+    def create_table(  # noqa: PLR0913
+        self,
+        identifier: str | Identifier,
+        schema: Schema | pa.Schema,
+        location: str | None = None,
+        partition_spec: PartitionSpec = UNPARTITIONED_PARTITION_SPEC,
+        sort_order: SortOrder = UNSORTED_SORT_ORDER,
+        properties: Properties = EMPTY_DICT,
     ) -> Table:
-        if partition_spec is None:
-            from pyiceberg.partitioning import UNPARTITIONED_PARTITION_SPEC
-
-            partition_spec = UNPARTITIONED_PARTITION_SPEC
         return self.create_table_transaction(
             identifier, schema, location, partition_spec, sort_order, properties
         ).commit_transaction()
 
-    def table_exists(self, identifier) -> bool:
-        return ".".join(Catalog.identifier_to_tuple(identifier)) in self._read_registry()["tables"]
+    def table_exists(self, identifier: str | Identifier) -> bool:
+        return (
+            ".".join(Catalog.identifier_to_tuple(identifier))
+            in self._read_registry()["tables"]
+        )
 
-    def view_exists(self, identifier) -> bool:
-        return ".".join(Catalog.identifier_to_tuple(identifier)) in self._read_registry()["views"]
+    def view_exists(self, identifier: str | Identifier) -> bool:
+        return (
+            ".".join(Catalog.identifier_to_tuple(identifier))
+            in self._read_registry()["views"]
+        )
 
-    def list_views(self, namespace) -> list[tuple[str, ...]]:
+    def list_views(self, namespace: str | Identifier) -> list[tuple[str, ...]]:
         prefix = f"{Catalog.namespace_to_string(namespace)}."
-        return [tuple(name.split(".")) for name in sorted(self._read_registry()["views"]) if name.startswith(prefix)]
+        return [
+            tuple(name.split("."))
+            for name in sorted(self._read_registry()["views"])
+            if name.startswith(prefix)
+        ]
 
-    def drop_view(self, identifier) -> None:
+    def drop_view(self, _identifier: str | Identifier) -> None:
         raise NotImplementedError
 
-    def drop_table(self, identifier) -> None:
+    def drop_table(self, _identifier: str | Identifier) -> None:
         raise NotImplementedError
 
-    def rename_table(self, from_identifier, to_identifier) -> Table:
+    def rename_table(
+        self, _from_identifier: str | Identifier, _to_identifier: str | Identifier
+    ) -> Table:
         raise NotImplementedError
 
-    def drop_namespace(self, namespace) -> None:
+    def drop_namespace(self, _namespace: str | Identifier) -> None:
         raise NotImplementedError
 
-    def update_namespace_properties(self, namespace, removals=None, updates=EMPTY_DICT):
+    def update_namespace_properties(
+        self,
+        _namespace: str | Identifier,
+        _removals: set[str] | None = None,
+        _updates: Properties = EMPTY_DICT,
+    ) -> PropertiesUpdateSummary:
         raise NotImplementedError
 
 
@@ -138,12 +190,15 @@ def create_view(
     how: str = "left",
 ) -> None:
     """Create a simple saved join view inside the registry."""
-    if len(sources) < 2:
+    if len(sources) < MIN_VIEW_SOURCES:
         raise ValueError("A view needs at least two sources.")
     bundle = catalog(warehouse)
-    identifier = ".".join(name.split(".")) if "." in name else f"{NAMESPACE}.{name}"
-    qualified_sources = [source if "." in source else f"{NAMESPACE}.{source}" for source in sources]
-    joins = [{"source": source, "on": join_keys, "how": how} for source in qualified_sources[1:]]
+    identifier = _qualify(name)
+    qualified_sources = [_qualify(source) for source in sources]
+    joins = [
+        {"source": source, "on": join_keys, "how": how}
+        for source in qualified_sources[1:]
+    ]
     registry = bundle._read_registry()
     registry["views"][identifier] = {
         "kind": "pandas_merge",
@@ -153,16 +208,21 @@ def create_view(
     bundle._write_registry(registry)
 
 
-def create_join_view(warehouse: str | Path, name: str, base: str, joins: list[dict[str, object]]) -> None:
+def create_join_view(
+    warehouse: str | Path, name: str, base: str, joins: list[dict[str, object]]
+) -> None:
     """Create a saved view with explicit join steps."""
     bundle = catalog(warehouse)
-    qualify = lambda value: value if "." in value else f"{NAMESPACE}.{value}"
     registry = bundle._read_registry()
-    registry["views"][qualify(name)] = {
+    registry["views"][_qualify(name)] = {
         "kind": "pandas_merge",
-        "base": qualify(base),
+        "base": _qualify(base),
         "joins": [
-            {"source": qualify(str(join["source"])), "on": list(join["on"]), "how": join.get("how", "left")}
+            {
+                "source": _qualify(str(join["source"])),
+                "on": list(join["on"]),
+                "how": join.get("how", "left"),
+            }
             for join in joins
         ],
     }
@@ -171,9 +231,16 @@ def create_join_view(warehouse: str | Path, name: str, base: str, joins: list[di
 
 def _read_view(bundle: TinyCatalog, name: str) -> pd.DataFrame:
     spec = bundle._read_registry()["views"][name]
-    result = bundle.load_table(tuple(spec["base"].split("."))).scan().to_arrow().to_pandas()
+    result = (
+        bundle.load_table(tuple(spec["base"].split("."))).scan().to_arrow().to_pandas()
+    )
     for join in spec["joins"]:
-        frame = bundle.load_table(tuple(join["source"].split("."))).scan().to_arrow().to_pandas()
+        frame = (
+            bundle.load_table(tuple(join["source"].split(".")))
+            .scan()
+            .to_arrow()
+            .to_pandas()
+        )
         result = result.merge(frame, on=join["on"], how=join["how"])
     return result
 
@@ -181,9 +248,17 @@ def _read_view(bundle: TinyCatalog, name: str) -> pd.DataFrame:
 def tables(warehouse: str | Path, include_views: bool = True) -> list[str]:
     """List fully qualified table names in a result bundle."""
     bundle = catalog(warehouse)
-    names = [".".join(identifier) for namespace in bundle.list_namespaces() for identifier in bundle.list_tables(namespace)]
+    names = [
+        ".".join(identifier)
+        for namespace in bundle.list_namespaces()
+        for identifier in bundle.list_tables(namespace)
+    ]
     if include_views:
-        names.extend(".".join(identifier) for namespace in bundle.list_namespaces() for identifier in bundle.list_views(namespace))
+        names.extend(
+            ".".join(identifier)
+            for namespace in bundle.list_namespaces()
+            for identifier in bundle.list_views(namespace)
+        )
     return sorted(names)
 
 

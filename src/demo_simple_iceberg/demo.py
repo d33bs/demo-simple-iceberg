@@ -5,32 +5,71 @@ from __future__ import annotations
 import argparse
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import pyarrow as pa
 from pyiceberg.schema import Schema
-from pyiceberg.types import DoubleType, ListType, LongType, NestedField, StringType, StructType
+from pyiceberg.types import (
+    DoubleType,
+    ListType,
+    LongType,
+    NestedField,
+    StringType,
+    StructType,
+)
 
-from demo_simple_iceberg.cytotable_access import NAMESPACE, TinyCatalog, create_join_view, describe, read
+from demo_simple_iceberg.cytotable_access import (
+    NAMESPACE,
+    TinyCatalog,
+    create_join_view,
+    describe,
+    read,
+)
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_WAREHOUSE = ROOT_DIR / "demo_warehouse"
+DEMO_ROW_COUNT = 3
 
 TABLES = {
     "profiles": pd.DataFrame(
         [
-            {"profile_id": "P-001", "image_id": "IMG-001", "well_id": "A01", "cell_count": 182, "mean_intensity": 0.82},
-            {"profile_id": "P-002", "image_id": "IMG-002", "well_id": "A02", "cell_count": 205, "mean_intensity": 0.67},
-            {"profile_id": "P-003", "image_id": "IMG-003", "well_id": "B01", "cell_count": 163, "mean_intensity": 0.91},
+            {
+                "profile_id": "P-001",
+                "image_id": "IMG-001",
+                "well_id": "A01",
+                "cell_count": 182,
+                "mean_intensity": 0.82,
+            },
+            {
+                "profile_id": "P-002",
+                "image_id": "IMG-002",
+                "well_id": "A02",
+                "cell_count": 205,
+                "mean_intensity": 0.67,
+            },
+            {
+                "profile_id": "P-003",
+                "image_id": "IMG-003",
+                "well_id": "B01",
+                "cell_count": 163,
+                "mean_intensity": 0.91,
+            },
         ]
     ),
 }
 
-def iceberg_schema(*fields) -> Schema:
-    return Schema(*(NestedField(i, name, dtype, required=False) for i, (name, dtype) in enumerate(fields, start=1)))
+
+def iceberg_schema(*fields: tuple[str, Any]) -> Schema:
+    return Schema(
+        *(
+            NestedField(i, name, dtype, required=False)
+            for i, (name, dtype) in enumerate(fields, start=1)
+        )
+    )
 
 
-def arrow_schema(*fields) -> pa.Schema:
+def arrow_schema(*fields: tuple[str, Any]) -> pa.Schema:
     return pa.schema([pa.field(name, dtype) for name, dtype in fields])
 
 
@@ -47,9 +86,30 @@ ICEBERG_SCHEMAS = {
         (
             "ome_image",
             StructType(
-                NestedField(1, "size_yx", ListType(element_id=2, element_type=LongType(), element_required=False), required=False),
-                NestedField(3, "channel_names", ListType(element_id=4, element_type=StringType(), element_required=False), required=False),
-                NestedField(5, "pixels", ListType(element_id=6, element_type=LongType(), element_required=False), required=False),
+                NestedField(
+                    1,
+                    "size_yx",
+                    ListType(
+                        element_id=2, element_type=LongType(), element_required=False
+                    ),
+                    required=False,
+                ),
+                NestedField(
+                    3,
+                    "channel_names",
+                    ListType(
+                        element_id=4, element_type=StringType(), element_required=False
+                    ),
+                    required=False,
+                ),
+                NestedField(
+                    5,
+                    "pixels",
+                    ListType(
+                        element_id=6, element_type=LongType(), element_required=False
+                    ),
+                    required=False,
+                ),
             ),
         ),
     ),
@@ -86,15 +146,28 @@ def image_table() -> pa.Table:
             "image_id": pa.array(["IMG-001", "IMG-002", "IMG-003"]),
             "ome_image": pa.array(
                 [
-                    {"size_yx": [2, 2], "channel_names": ["DNA"], "pixels": [0, 32, 64, 255]},
-                    {"size_yx": [2, 2], "channel_names": ["DNA"], "pixels": [8, 24, 96, 180]},
-                    {"size_yx": [2, 2], "channel_names": ["DNA"], "pixels": [12, 48, 128, 220]},
+                    {
+                        "size_yx": [2, 2],
+                        "channel_names": ["DNA"],
+                        "pixels": [0, 32, 64, 255],
+                    },
+                    {
+                        "size_yx": [2, 2],
+                        "channel_names": ["DNA"],
+                        "pixels": [8, 24, 96, 180],
+                    },
+                    {
+                        "size_yx": [2, 2],
+                        "channel_names": ["DNA"],
+                        "pixels": [12, 48, 128, 220],
+                    },
                 ],
                 type=ARROW_SCHEMAS["images"].field("ome_image").type,
             ),
         },
         schema=ARROW_SCHEMAS["images"],
     )
+
 
 def build_demo_warehouse(warehouse_root: Path = DEFAULT_WAREHOUSE) -> TinyCatalog:
     if warehouse_root.exists():
@@ -103,7 +176,13 @@ def build_demo_warehouse(warehouse_root: Path = DEFAULT_WAREHOUSE) -> TinyCatalo
     catalog.create_namespace(NAMESPACE)
     for name, frame in {**TABLES, "images": image_table()}.items():
         table = catalog.create_table((NAMESPACE, name), ICEBERG_SCHEMAS[name])
-        arrow_table = frame if isinstance(frame, pa.Table) else pa.Table.from_pandas(frame, schema=ARROW_SCHEMAS[name], preserve_index=False)
+        arrow_table = (
+            frame
+            if isinstance(frame, pa.Table)
+            else pa.Table.from_pandas(
+                frame, schema=ARROW_SCHEMAS[name], preserve_index=False
+            )
+        )
         table.append(arrow_table)
     create_join_view(
         warehouse_root,
@@ -127,9 +206,15 @@ def inspect_table(catalog: TinyCatalog, name: str) -> dict[str, pd.DataFrame]:
     snapshots = table.inspect.snapshots().to_pandas()
     return {
         "data": table.scan().to_arrow().to_pandas(),
-        "files": files.loc[:, ["file_path", "file_format", "record_count", "file_size_in_bytes"]],
-        "manifests": manifests.loc[:, ["path", "added_snapshot_id", "added_data_files_count"]],
-        "snapshots": snapshots.loc[:, ["snapshot_id", "parent_id", "operation", "committed_at"]],
+        "files": files.loc[
+            :, ["file_path", "file_format", "record_count", "file_size_in_bytes"]
+        ],
+        "manifests": manifests.loc[
+            :, ["path", "added_snapshot_id", "added_data_files_count"]
+        ],
+        "snapshots": snapshots.loc[
+            :, ["snapshot_id", "parent_id", "operation", "committed_at"]
+        ],
         "summary": pd.DataFrame(
             [
                 {
@@ -145,7 +230,9 @@ def inspect_table(catalog: TinyCatalog, name: str) -> dict[str, pd.DataFrame]:
     }
 
 
-def build_demo_outputs(warehouse_root: Path = DEFAULT_WAREHOUSE) -> dict[str, pd.DataFrame]:
+def build_demo_outputs(
+    warehouse_root: Path = DEFAULT_WAREHOUSE,
+) -> dict[str, pd.DataFrame]:
     catalog = build_demo_warehouse(warehouse_root)
     profiles = inspect_table(catalog, "profiles")
     images = inspect_table(catalog, "images")

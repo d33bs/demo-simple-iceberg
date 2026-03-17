@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from demo_simple_iceberg.demo import build_demo_outputs
+from demo_simple_iceberg.demo import build_demo_outputs, main
 
 
 def test_build_demo_outputs(tmp_path: Path) -> None:
@@ -22,8 +22,6 @@ def test_build_demo_outputs(tmp_path: Path) -> None:
 
 def test_cli_main_prints_sections(tmp_path: Path, capsys: object) -> None:
     """The module entrypoint should print the expected sections."""
-    from demo_simple_iceberg.demo import main
-
     main(["--warehouse-root", str(tmp_path / "warehouse")])
     captured = capsys.readouterr()
 

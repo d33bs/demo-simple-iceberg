@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from demo_simple_iceberg.cytotable_access import create_view, describe, read, tables
-from demo_simple_iceberg.demo import build_demo_warehouse
+from demo_simple_iceberg.demo import DEMO_ROW_COUNT, build_demo_warehouse
 
 
 def test_result_helpers_make_warehouse_easy_to_use(tmp_path: Path) -> None:
@@ -39,4 +39,4 @@ def test_custom_views_can_join_tables(tmp_path: Path) -> None:
     assert "analytics.profiles_with_images" in tables(warehouse)
     joined = read(warehouse=warehouse, table="profiles_with_images")
     assert "ome_image" in joined.columns
-    assert joined.shape[0] == 3
+    assert joined.shape[0] == DEMO_ROW_COUNT
