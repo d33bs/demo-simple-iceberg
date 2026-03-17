@@ -1,0 +1,82 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = [ "setuptools>=64" ]
+
+[project]
+name = "demo-simple-iceberg"
+version = "0.0.1"
+description = "Small local Apache Iceberg catalog demo for pandas-style workflows"
+readme = "README.md"
+authors = [
+  { name = "d33bs" },
+]
+requires-python = ">=3.11"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+  "ome-arrow>=0.0.8",
+  "pandas>=2.2.3",
+  "pyarrow>=19.0.1",
+  "pyiceberg[pyarrow]>=0.9",
+]
+scripts.demo-simple-iceberg = "demo_simple_iceberg.demo:main"
+
+[dependency-groups]
+dev = [
+  "poethepoet>=0.34",
+  "pytest>=8.3.5",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages.find.where = [ "src" ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+fix = true
+lint.select = [
+  # flake8-builtins
+  "A",
+  # flake8-annotations
+  "ANN",
+  # flake8-comprehensions
+  "C4",
+  # mccabe
+  "C90",
+  # pycodestyle
+  "E",
+  # pyflakes
+  "F",
+  # isort
+  "I",
+  # pylint
+  "PL",
+  # ruff
+  "RUF",
+  # flake8-simplify
+  "SIM",
+  "W",
+]
+# Ignore `F401` (unused imports) for `__init__.py` file
+lint.per-file-ignores."__init__.py" = [ "F401" ]
+
+[tool.pytest]
+ini_options.pythonpath = [ "." ]
+
+[tool.vulture]
+min_confidence = 90
+paths = [ "src/demo_simple_iceberg", "tests" ]
+
+[tool.poe]
+tasks.test.shell = """
+pytest
+"""
+tasks.demo.shell = """
+python -m demo_simple_iceberg.demo
+"""
